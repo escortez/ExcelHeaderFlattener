@@ -26,7 +26,7 @@ namespace ChangeHeaders
                 // containing a worksheet that adds a few numbers together 
                 Console.WriteLine("Running UpdatHeader");
                
-                string output = UpdateHeader.Run(args.First(), outputDir);
+                string output = UpdateHeader.Run(args.FirstOrDefault(), outputDir);
                 Console.WriteLine("New File created: {0}", output);
                 Console.WriteLine();
             }

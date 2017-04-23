@@ -5,188 +5,231 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Configuration;
+using System.Drawing;
+using OfficeOpenXml.Style;
+using OfficeOpenXml.Packaging;
+using Microsoft.Office.Interop.Excel;
 
 namespace ChangeHeaders
 {
     class UpdateHeader
     {
+
+
+
+
         public static string Run(string FilePath, DirectoryInfo outputDir)
         {
-            //FileInfo newFile = new FileInfo(outputDir.FullName + @"\sample1.xlsx");
-            //if (newFile.Exists)
-            //{
-            //    newFile.Delete();  // ensures we create a new workbook
-            //    newFile = new FileInfo(outputDir.FullName + @"\sample1.xlsx");
-            //}
 
-            //Console.WriteLine("Reading column 2 of {0}", FilePath);
-            //Console.WriteLine();
+            var sheetNames = ConfigurationManager.AppSettings["sheets"].Split(',').Select(y=>y.Trim());
 
-            var newFilePath = ConvertToXLSX(FilePath);
-            FileInfo existingFile = new FileInfo(newFilePath);
-
-            
-            //byte[] file = File.ReadAllBytes(newFilePath);
-            //using (MemoryStream existingFile = new MemoryStream(file))
-
-            using (ExcelPackage package = new ExcelPackage(existingFile))
+            string[] files = new string[] { };
+            if (String.IsNullOrEmpty(FilePath))
             {
-                // get the first worksheet in the workbook
-                ExcelWorksheet worksheet = package.Workbook.Worksheets.FirstOrDefault(x => x.Name == "SUMMARY SHEET");
+                string directoryPath = ConfigurationManager.AppSettings["directory"];
+                string fileKeyword = "*" + ConfigurationManager.AppSettings["file_name_keyword"] + "*";
+                files = Directory.GetFiles(directoryPath, fileKeyword, SearchOption.AllDirectories).Where(x=> !x.EndsWith("_mod.xlsx") ).ToArray();
+            }
+            else
+            {
+                files[0] = FilePath;
+            }
 
-                //find the bottom-most header row
-                int HeaderBotRow = 1;
-                for (int i = 1; i <= 100; i++)
+            foreach (var fileName in files)
+            {
+
+                string newFilePath = fileName;
+                //if (fileName.EndsWith(".xls"))
+                //{ 
+                    newFilePath = ConvertToXLSX(fileName);
+                //} else if (fileName.EndsWith(".xlsx"))
+                //{
+                //    newFilePath = fileName.Replace(".xlxs", "_mod.xlsx");
+
+                //}
+                //else
+                //{
+                //    // don't proceed if the file wasn't xls or xlsx
+                //    continue;
+                //}
+
+                
+
+                FileInfo existingFile = new FileInfo(newFilePath);
+
+
+                //byte[] file = File.ReadAllBytes(newFilePath);
+                //using (MemoryStream existingFile = new MemoryStream(file))
+
+                using (ExcelPackage package = new ExcelPackage(existingFile))
                 {
-                    var cellVal = worksheet.Cells[i, 1].Text;
-                    if (cellVal == "Line #")
+                    // get the first worksheet in the workbook
+                    var worksheets = package.Workbook.Worksheets.Where(x => sheetNames.Contains(x.Name));
+
+                    foreach (var worksheet in worksheets)
                     {
-                        HeaderBotRow = i;
-                        break;
-                    }
+                        //find the bottom-most header row
+                        int HeaderBotRow = GetBotHeaderRow(worksheet, "Line #");
 
-                }
+                        // find the top of the header
+                        int HeaderTopRow = GetTopHeaderRow(worksheet, HeaderBotRow);
 
-                // find the top of the header
-                int HeaderTopRow = 1;
-                for (int i = HeaderBotRow; i >= 1; i--)
-                {
-                    var cellVal = worksheet.Cells[i, 1].Text;
-                    if (cellVal == "")
-                    {
-                        HeaderTopRow = i;
+                        //find end of table
+                        int lastCol = FindLastCol(worksheet, HeaderBotRow);
 
-                    }
-                    else if (i != HeaderBotRow)
-                    {
-                        break;
-                    }
-
-                }
-
-
-                // unMerge header cells and replicate the value across
-                var mergedCells = worksheet.MergedCells.ToList();
-                foreach (var mC in mergedCells)
-                {
-                    var startCellRow = worksheet.Cells[mC].Start.Row;
-                    //make sure we are only looking in the header
-                    if(startCellRow<6 || startCellRow > 9){
-                        continue;
-                    }
-
-                    var startCellCol = worksheet.Cells[mC].Start.Column;
-                    var endCellCol = worksheet.Cells[mC].End.Column;
-
-                    var txt = worksheet.Cells[startCellRow, startCellCol].Text;
-
-                    worksheet.Cells[mC].Merge = false;
-                    worksheet.Cells[mC].Value = txt;
-                }
-                //find end of table
-                int lastCol = 1;
-                for(int i=1; i<= 500; i++)
-                {
-                    if(i > 1 && worksheet.Cells[HeaderBotRow, i].Text == ""
-                        && worksheet.Cells[HeaderBotRow, i+1].Text == "") //check for two blanks in a row
-                    {
-                        lastCol = i-1;
-                        break;
-                    }
-                }
-
-                //starting at the 2nd to bottom header row, copy cells to the right for "fake" merged fields
-                var secHeaderBotRow = HeaderBotRow - 1;
-                if (secHeaderBotRow >= 1)
-                {
-                    bool firstNonBlankHit = false;
-                    for (int i=1; i <= lastCol; i++)
-                    {
-                        var cellVal = worksheet.Cells[secHeaderBotRow, i].Text;
-                        if (!firstNonBlankHit && cellVal == "")
+                        // unMerge header cells and replicate the value across
+                        var mergedCells = worksheet.MergedCells.ToList();
+                        foreach (var mC in mergedCells)
                         {
+                            var startCellRow = worksheet.Cells[mC].Start.Row;
+                            //make sure we are only looking in the header
+                            if (startCellRow < HeaderTopRow || startCellRow > HeaderBotRow)
+                            {
+                                continue;
+                            }
 
+                            var startCellCol = worksheet.Cells[mC].Start.Column;
+                            var endCellCol = worksheet.Cells[mC].End.Column;
+
+                            var txt = worksheet.Cells[startCellRow, startCellCol].Text;
+
+                            worksheet.Cells[mC].Merge = false;
+                            worksheet.Cells[mC].Value = txt;
+                        }
+
+
+                        //starting at the 2nd to bottom header row, copy cells to the right for "fake" merged fields
+                        var secHeaderBotRow = HeaderBotRow - 1;
+                        if (secHeaderBotRow >= 1)
+                        {
+                            bool firstNonBlankHit = false;
+                            for (int i = 1; i <= lastCol; i++)
+                            {
+                                var cellVal = worksheet.Cells[secHeaderBotRow, i].Text;
+                                if (!firstNonBlankHit && cellVal == "")
+                                {
+
+                                }
+                                else
+                                {
+                                    firstNonBlankHit = true;
+                                }
+
+                                if (firstNonBlankHit)
+                                {
+                                    if (cellVal == "")
+                                    {
+                                        var prevCellVal = worksheet.Cells[secHeaderBotRow, i - 1].Text;
+                                        worksheet.Cells[secHeaderBotRow, i].Value = prevCellVal;
+                                    }
+
+                                }
+
+                            }
+                        }
+
+
+                        // trickle down header values to the Bottom header row
+                        for (int i = 1; i <= lastCol; i++)
+                        {
+                            for (int j = HeaderBotRow; j >= HeaderTopRow; j--)
+                            {
+                                if (j - 1 >= HeaderTopRow && worksheet.Cells[j, i].Text == "" && worksheet.Cells[j - 1, i].Text != "")
+                                {
+                                    worksheet.Cells[j, i].Value = worksheet.Cells[j - 1, i].Text;
+                                    worksheet.Cells[j - 1, i].Value = "";
+                                }
+                            }
+                        }
+
+
+                        var newHeaderRow = 1;
+                        if (worksheet.Name != "AUDIT SHEET")
+                        {
+                            //// Insert a header row
+                            int rowAddCount = 1;
+                            newHeaderRow = HeaderBotRow + 1;
+                            worksheet.InsertRow(newHeaderRow, rowAddCount);
+                        }
+
+                        //using (var rng = worksheet.Cells[newHeaderRow,1,newHeaderRow,lastCol])
+                        //{
+
+                        //    rng.Style.Font.Bold = true;
+                        //    rng.Style.Font.Color.SetColor(System.Drawing.Color.White);
+                        //    rng.Style.WrapText = true;
+                        //    rng.Style.VerticalAlignment = ExcelVerticalAlignment.Center;
+                        //    rng.Style.HorizontalAlignment = ExcelHorizontalAlignment.Center;
+                        //    rng.Style.Fill.PatternType = ExcelFillStyle.Solid;
+                        //    rng.Style.Fill.BackgroundColor.SetColor(Color.DarkBlue);
+                        //}
+
+
+                        //var copyrow = newHeaderRow + rowAddCount;
+                        //for (var i = 0; i < rowAddCount; i++)
+                        //{
+                        //    var row = newHeaderRow + i;
+                        //    worksheet.Cells[String.Format("{0}:{0}", copyrow)].Copy(worksheet.Cells[String.Format("{0}:{0}", row)]);
+                        //    worksheet.Row(row).StyleID = worksheet.Row(copyrow).StyleID;
+                        //}
+                        //May not be needed but cant hurt
+                        //worksheet.Cells.Worksheet.Workbook.Styles.UpdateXml();
+
+                        //Fill header row with concatenated values of rows above
+                        for (int i = 1; i <= lastCol; i++)
+                        {
+                            for (int j = HeaderBotRow; j >= HeaderTopRow; j--)
+                            {
+                                if (worksheet.Cells[j, i].Text == "")
+                                {
+                                    break;
+                                }
+                                else
+                                {
+                                    if (j == HeaderBotRow)
+                                    {
+                                        worksheet.Cells[newHeaderRow, i].Value = worksheet.Cells[j, i].Text;
+                                    }
+                                    else {
+                                        worksheet.Cells[newHeaderRow, i].Value = worksheet.Cells[j, i].Text + " " + worksheet.Cells[newHeaderRow, i].Text;
+                                    }
+                                }
+                            }
+                        }
+
+                        worksheet.View.UnFreezePanes();
+                        worksheet.Cells.Style.Fill.PatternType = ExcelFillStyle.None;
+                        if (worksheet.Name != "AUDIT SHEET")
+                        {
+                            //remove everything above the new header row
+                            for (int i = 1; i < newHeaderRow; i++)
+                            {
+                                worksheet.DeleteRow(1, 1);
+                            }
                         }
                         else
                         {
-                            firstNonBlankHit = true;
-                        }
-
-                        if (firstNonBlankHit)
-                        {
-                            if(cellVal == "")
-                            {
-                                var prevCellVal = worksheet.Cells[secHeaderBotRow, i-1].Text;
-                                worksheet.Cells[secHeaderBotRow, i].Value = prevCellVal;
-                            }
+                            //hack because there is a bug with deleting rows
+                            worksheet.Cells[2, 1, HeaderBotRow, lastCol].Value = "";
+                            //worksheet.DeleteRow(1, 1);
 
                         }
-                        
-                    }
-                }
 
 
-                // trickle down header values to the Bottom header row
-                for (int i = 1; i <= lastCol; i++)
-                {
-                    for (int j = HeaderBotRow; j >= HeaderTopRow; j--)
-                    {
-                        if (j - 1 >= HeaderTopRow && worksheet.Cells[j, i].Text == "" && worksheet.Cells[j - 1, i].Text != "")
-                        {
-                            worksheet.Cells[j, i].Value = worksheet.Cells[j - 1, i].Text;
-                            worksheet.Cells[j - 1, i].Value = "";
-                        }
-                    }
-                }
+                        worksheet.View.FreezePanes(1, 2);
 
-                // Insert a header row
-                worksheet.InsertRow(HeaderBotRow + 1, 1);
-                var newHeaderRow = HeaderBotRow + 1;
+                    } // end loop through worksheets // the using statement automatically calls Dispose() which closes the package.
+                    package.Save();
 
-                //Fill header row with concatenated values of rows above
-                for (int i = 1; i <= lastCol; i++)
-                {
-                    for (int j = HeaderBotRow; j >= HeaderTopRow; j--)
-                    {
-                        if (worksheet.Cells[j, i].Text == "")
-                        {
-                            break;
-                        }
-                        else
-                        {
-                            if (j == HeaderBotRow)
-                            {
-                                worksheet.Cells[newHeaderRow, i].Value = worksheet.Cells[j, i].Text;
-                            }
-                            else {
-                                worksheet.Cells[newHeaderRow, i].Value = worksheet.Cells[j, i].Text + " " + worksheet.Cells[newHeaderRow, i].Text;
-                            }
-                        }
-                    }
-                }
-
-                //remove everything above the new header row
-                for (int i = 1; i < newHeaderRow; i++)
-                {
-                    worksheet.DeleteRow(1, 1);
-                }
-                worksheet.View.UnFreezePanes();
-                worksheet.View.FreezePanes(1, 2);
-
-
-                // output the formula in row 5
-                //Console.WriteLine("\tCell({0},{1}).Formula={2}", 5, 3, worksheet.Cells[5, 3].Formula);
-                //Console.WriteLine("\tCell({0},{1}).FormulaR1C1={2}", 5, 3, worksheet.Cells[5, 3].FormulaR1C1);
-
-                package.Save();
-            } // the using statement automatically calls Dispose() which closes the package.
-
+                } //end package using stmnt ( for a particular file)
+            } //end files loop 
             
             Console.WriteLine();
             Console.WriteLine("UpdateHeader complete");
             Console.WriteLine();
 
-            return newFilePath;
+            return string.Join(",", files);
         }
 
         public void ConvertToXLSXDir(String filesFolder)
@@ -212,10 +255,74 @@ namespace ChangeHeaders
             var app = new Microsoft.Office.Interop.Excel.Application();
             app.DisplayAlerts = false;
             var wb = app.Workbooks.Open(FilePath);
-            wb.SaveAs(Filename: FilePath + "x", FileFormat: Microsoft.Office.Interop.Excel.XlFileFormat.xlOpenXMLWorkbook);
+
+            string newFileName = "";
+            if (FilePath.EndsWith(".xls"))
+            {
+                newFileName = FilePath.Replace(".xls", "_mod.xlsx");
+            }
+            else if (FilePath.EndsWith(".xlsx"))
+            {
+                newFileName = FilePath.Replace(".xlsx", "_mod.xlsx");
+            }
+            
+            wb.SaveAs(Filename: newFileName, FileFormat: Microsoft.Office.Interop.Excel.XlFileFormat.xlOpenXMLWorkbook);
             wb.Close();
             app.Quit();
-            return FilePath + "x";
+            return newFileName;
         }
+
+      
+
+        public static int FindLastCol(ExcelWorksheet worksheet, int HeaderBotRow)
+        {
+            int lastCol = 1;
+            for (int i = 1; i <= 500; i++)
+            {
+                if (i > 1 && worksheet.Cells[HeaderBotRow, i].Text == ""
+                    && worksheet.Cells[HeaderBotRow, i + 1].Text == "") //check for two blanks in a row
+                {
+                    lastCol = i - 1;
+                    break;
+                }
+            }
+            return lastCol;
+        }
+
+        public static int GetBotHeaderRow(ExcelWorksheet worksheet, string guide)
+        {
+            int HeaderBotRow = 1;
+            for (int i = 1; i <= 100; i++)
+            {
+                var cellVal = worksheet.Cells[i, 1].Text;
+                if (cellVal == guide)
+                {
+                    HeaderBotRow = i;
+                    break;
+                }
+            }
+            return HeaderBotRow;
+        }
+        public static int GetTopHeaderRow(ExcelWorksheet worksheet, int HeaderBotRow)
+        {
+            int HeaderTopRow = 1;
+            for (int i = HeaderBotRow; i >= 1; i--)
+            {
+                var cellVal = worksheet.Cells[i, 1].Text;
+                if (cellVal == "")
+                {
+                    HeaderTopRow = i;
+
+                }
+                else if (i != HeaderBotRow)
+                {
+                    break;
+                }
+
+            }
+
+            return HeaderTopRow;
+        }
+
     }
 }
